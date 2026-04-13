@@ -11,9 +11,10 @@
 // #define TMC_DRIVER_2130   // TMC2130 STEP/DIR + SPI  (full featured)
 
 // ── Feature flags ─────────────────────────────────────────────────────────
-#define USE_ENCODER           // AS5048B magnetic encoders (I2C1)
-// #define USE_RS485          // RS485 transceiver su PA15
-#define DEBUG_SERIAL          // debug su Serial (USB CDC disabilitata → noop)
+#define GEAR_RATIO  144UL	// Mechanical ratio (es. 144:1)
+#define USE_ENCODER			// AS5048B magnetic encoders (I2C1)
+// #define USE_RS485		// RS485 transceiver su PA15
+#define DEBUG_SERIAL		// debug su Serial (USB CDC disabilitata → noop)
 
 // ── Pin motori — tutti su PB ──────────────────────────────────────────────
 constexpr uint8_t RA_STEP      = PB0;
@@ -63,7 +64,7 @@ constexpr uint16_t TMC_CURRENT_FOCUS = 400;
 constexpr uint8_t  TMC_MICROSTEPS    = 16;
 
 // ── Parametri meccanici ───────────────────────────────────────────────────
-constexpr uint32_t STEPS_PER_REV         = 200UL * TMC_MICROSTEPS * 144UL;
+constexpr uint32_t STEPS_PER_REV         = 200UL * TMC_MICROSTEPS * GEAR_RATIO;
 constexpr float    MAX_SPEED             = 2000.0f;
 constexpr float    ACCELERATION          = 500.0f;
 constexpr float    SIDEREAL_RATE_HZ      = (float)STEPS_PER_REV / 86164.0f;
