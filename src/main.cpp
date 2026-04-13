@@ -4,6 +4,7 @@
 #include "modbus_slave.h"
 #include "registers.h"
 #include "led_status.h"
+#include "tmc_driver.h"
 
 #ifdef USE_ENCODER
   #include <Wire.h>
@@ -13,25 +14,22 @@
 #endif
 
 // ── Seriale Modbus ───────────────────────────────────────────────────────────
-HardwareSerial SerialModbus(PA10, PA9);
+HardwareSerial SerialModbus(MODBUS_RX_PIN, MODBUS_TX_PIN);
+
+// ── Seriale Trinamic ─────────────────────────────────────────────────────────
+HardwareSerial SerialTMC(TMC_SERIAL_RX, TMC_SERIAL_TX);
 
 // ── Registri Modbus ──────────────────────────────────────────────────────────
 uint16_t regs[Reg::TOTAL] = {0};
 
+// ── TMCDriver ────────────────────────────────────────────────────────────────
+TMCDriver tmcDriver;
 
 #ifdef USE_RS485
-  ModbusSlave modbus(regs, Reg::TOTAL, 1, SerialModbus, PA8);
+  ModbusSlave modbus(regs, Reg::TOTAL, 1, SerialModbus, PA15);
 #else
   ModbusSlave modbus(regs, Reg::TOTAL, 1, SerialModbus, -1);
 #endif
-
-// ── Pin motori ───────────────────────────────────────────────────────────────
-constexpr uint8_t RA_STEP  = PB3;
-constexpr uint8_t RA_DIR   = PB4;
-constexpr uint8_t RA_EN    = PB5;
-constexpr uint8_t DEC_STEP = PB6;
-constexpr uint8_t DEC_DIR  = PB7;
-constexpr uint8_t DEC_EN   = PB8;
 
 // ── AccelStepper ─────────────────────────────────────────────────────────────
 AccelStepper axisRA (AccelStepper::DRIVER, RA_STEP,  RA_DIR);
@@ -167,8 +165,15 @@ void setup() {
         Serial.println("[BOOT] Telescope controller starting...");
     #endif
 
-    modbus.begin(9600);
+    modbus.begin(MODBUS_BAUDRATE);
     ledStatus.begin();
+
+    tmcDriver.begin();
+    // Segnala errore su LED se un driver non risponde
+    if (!tmcDriver.isRAok() || !tmcDriver.isDECok()) {
+        regs[Reg::STATUS]     = Status::ERROR;
+        regs[Reg::ERROR_CODE] = 0x02;  // driver fault
+    }
 
     pinMode(RA_EN,  OUTPUT); digitalWrite(RA_EN,  LOW);
     pinMode(DEC_EN, OUTPUT); digitalWrite(DEC_EN, LOW);
