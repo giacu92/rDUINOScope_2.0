@@ -12,7 +12,7 @@
 
 // ── Feature flags ─────────────────────────────────────────────────────────
 #define GEAR_RATIO  144UL	// Mechanical ratio (es. 144:1)
-#define USE_ENCODER			// AS5048B magnetic encoders (I2C1)
+//#define USE_ENCODER			// AS5048B magnetic encoders (I2C1)
 // #define USE_RS485		// RS485 transceiver su PA15
 #define DEBUG_SERIAL		// debug su Serial (USB CDC disabilitata → noop)
 
@@ -31,7 +31,7 @@ constexpr uint8_t FOCUS_EN     = PB15;
 
 // ── Modbus — Serial1 (USART1) ─────────────────────────────────────────────
 // PA9=TX, PA10=RX  (hardware USART1)
-#define MODBUS_BAUDRATE 115200
+#define MODBUS_BAUDRATE 57600
 constexpr uint8_t MODBUS_RX_PIN = PA10;
 constexpr uint8_t MODBUS_TX_PIN = PA9;
 constexpr uint8_t RS485_DE_PIN  = PA15;  // #ifdef USE_RS485
