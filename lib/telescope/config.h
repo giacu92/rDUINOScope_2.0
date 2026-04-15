@@ -11,7 +11,7 @@
 // #define TMC_DRIVER_2130   // TMC2130 STEP/DIR + SPI  (full featured)
 
 // ── Feature flags ─────────────────────────────────────────────────────────
-#define GEAR_RATIO  144UL	// Mechanical ratio (es. 144:1)
+#define GEAR_RATIO  72UL	// Mechanical ratio (es. 144:1)
 //#define USE_ENCODER			// AS5048B magnetic encoders (I2C1)
 // #define USE_RS485		// RS485 transceiver su PA15
 #define DEBUG_SERIAL		// debug su Serial (USB CDC disabilitata → noop)

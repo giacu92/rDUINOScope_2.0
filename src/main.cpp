@@ -39,6 +39,11 @@ AccelStepper axisDEC(AccelStepper::DRIVER, DEC_STEP, DEC_DIR);
 bool trackingActive = false;
 LedStatus ledStatus;
 
+uint32_t currentRAArcsec100  = 0;
+uint32_t currentDECArcsec100 = 0;
+uint32_t targetRAArcsec100   = 0;
+uint32_t targetDECArcsec100  = 0;
+
 
 // ── Helpers coordinate ───────────────────────────────────────────────────────
 inline int32_t arcsec100ToSteps(uint32_t arcsec100) {
@@ -47,6 +52,10 @@ inline int32_t arcsec100ToSteps(uint32_t arcsec100) {
 
 inline uint32_t stepsToArcsec100(int32_t steps) {
     return (uint32_t)((float)steps * 129600000.0f / STEPS_PER_REV);
+}
+
+inline uint32_t normalizeRAArcsec100(uint32_t arcsec100) {
+    return arcsec100 % 129600000UL;
 }
 
 // ── Encoder: lettura con gestione wrap-around ────────────────────────────────
@@ -67,9 +76,9 @@ int32_t encoderToSteps(AMS_AS5048B& enc, float& lastAngle, int32_t& accumSteps) 
 
 // ── Tracking siderale ────────────────────────────────────────────────────────
 void startTracking() {
-    axisRA.setMaxSpeed(SIDEREAL_RATE_HZ * 1.1f);
+    axisRA.setMaxSpeed(SIDEREAL_RATE_HZ);
     axisRA.setAcceleration(10.0f);
-    axisRA.moveTo(axisRA.currentPosition() + (long)STEPS_PER_REV * 100L);
+    axisRA.moveTo(axisRA.currentPosition() - (long)STEPS_PER_REV * 1000L);
     trackingActive = true;
     #ifdef DEBUG_SERIAL
         Serial.println("[TRACK] Sidereal tracking started");
@@ -130,19 +139,33 @@ void updatePositionRegisters() {
             abs(errDEC) > ENCODER_ERROR_THRESHOLD)) {
             regs[Reg::STATUS]     = Status::ERROR;
             regs[Reg::ERROR_CODE] = 0x01;  // position fault
-            encode32(stepsToArcsec100(encRA),  regs[Reg::CURRENT_RA_HI],  regs[Reg::CURRENT_RA_LO]);
+            encode32(normalizeRAArcsec100(stepsToArcsec100(encRA)),
+                     regs[Reg::CURRENT_RA_HI], regs[Reg::CURRENT_RA_LO]);
             encode32(stepsToArcsec100(encDEC), regs[Reg::CURRENT_DEC_HI], regs[Reg::CURRENT_DEC_LO]);
             return;
         }
 
-        encode32(stepsToArcsec100(encRA),  regs[Reg::CURRENT_RA_HI],  regs[Reg::CURRENT_RA_LO]);
-        encode32(stepsToArcsec100(encDEC), regs[Reg::CURRENT_DEC_HI], regs[Reg::CURRENT_DEC_LO]);
+        if (!trackingActive) {
+            currentRAArcsec100 = normalizeRAArcsec100(stepsToArcsec100(encRA));
+        }
+        currentDECArcsec100 = stepsToArcsec100(encDEC);
+
+        encode32(currentRAArcsec100,  regs[Reg::CURRENT_RA_HI],  regs[Reg::CURRENT_RA_LO]);
+        encode32(currentDECArcsec100, regs[Reg::CURRENT_DEC_HI], regs[Reg::CURRENT_DEC_LO]);
     }
     #else
     {
-        encode32(stepsToArcsec100(axisRA.currentPosition()),
+        if (!trackingActive && axisRA.distanceToGo() != 0) {
+            currentRAArcsec100 = normalizeRAArcsec100(
+                stepsToArcsec100(axisRA.currentPosition()));
+        }
+        if (!trackingActive && axisDEC.distanceToGo() != 0) {
+            currentDECArcsec100 = stepsToArcsec100(axisDEC.currentPosition());
+        }
+
+        encode32(currentRAArcsec100,
                  regs[Reg::CURRENT_RA_HI], regs[Reg::CURRENT_RA_LO]);
-        encode32(stepsToArcsec100(axisDEC.currentPosition()),
+        encode32(currentDECArcsec100,
                  regs[Reg::CURRENT_DEC_HI], regs[Reg::CURRENT_DEC_LO]);
     }
     #endif
@@ -217,11 +240,13 @@ void loop() {
             case Cmd::GOTO: {
                 uint32_t ra  = decode32(regs[Reg::TARGET_RA_HI],  regs[Reg::TARGET_RA_LO]);
                 uint32_t dec = decode32(regs[Reg::TARGET_DEC_HI], regs[Reg::TARGET_DEC_LO]);
+                targetRAArcsec100  = normalizeRAArcsec100(ra);
+                targetDECArcsec100 = dec;
                 stopTracking();
                 axisRA.setMaxSpeed(MAX_SPEED);
                 axisRA.setAcceleration(ACCELERATION);
-                axisRA.moveTo(arcsec100ToSteps(ra));
-                axisDEC.moveTo(arcsec100ToSteps(dec));
+                axisRA.moveTo(arcsec100ToSteps(targetRAArcsec100));
+                axisDEC.moveTo(arcsec100ToSteps(targetDECArcsec100));
                 regs[Reg::STATUS] = Status::SLEWING;
                 #ifdef DEBUG_SERIAL
                     Serial.printf("[CMD] GOTO RA=%lu DEC=%lu\n", ra, dec);
@@ -239,10 +264,14 @@ void loop() {
                 break;
 
             case Cmd::SYNC: {
-                int32_t raSteps  = arcsec100ToSteps(
+                currentRAArcsec100 = normalizeRAArcsec100(
                     decode32(regs[Reg::TARGET_RA_HI],  regs[Reg::TARGET_RA_LO]));
-                int32_t decSteps = arcsec100ToSteps(
-                    decode32(regs[Reg::TARGET_DEC_HI], regs[Reg::TARGET_DEC_LO]));
+                currentDECArcsec100 = decode32(regs[Reg::TARGET_DEC_HI],
+                                               regs[Reg::TARGET_DEC_LO]);
+                targetRAArcsec100  = currentRAArcsec100;
+                targetDECArcsec100 = currentDECArcsec100;
+                int32_t raSteps  = arcsec100ToSteps(currentRAArcsec100);
+                int32_t decSteps = arcsec100ToSteps(currentDECArcsec100);
                 axisRA.setCurrentPosition(raSteps);
                 axisDEC.setCurrentPosition(decSteps);
                 startTracking();
@@ -259,6 +288,8 @@ void loop() {
     bool isMoving = (axisDEC.distanceToGo() != 0) ||
                     (!trackingActive && axisRA.distanceToGo() != 0);
     if (wasMoving && !isMoving) {
+        currentRAArcsec100  = targetRAArcsec100;
+        currentDECArcsec100 = targetDECArcsec100;
         startTracking();
         #ifdef DEBUG_SERIAL
             Serial.println("[GOTO] Complete, tracking started");

@@ -29,8 +29,8 @@ public:
                 break;
 
             case Status::TRACKING:
-                // Blink 1Hz → 500ms on, 500ms off
-                blink(now, 500, 500);
+                // Blink 1Hz → 1000ms on, 1000ms off
+                blink(now, 1000, 1000);
                 break;
 
             case Status::ERROR:
