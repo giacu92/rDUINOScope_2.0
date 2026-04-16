@@ -37,7 +37,8 @@ namespace Status {
     constexpr uint16_t ERROR    = 3;
 }
 
-// Helper per encode/decode coordinate 32bit su due registri 16bit
+// Helper per encode/decode coordinate 32bit su due registri 16bit.
+// RA usa valori unsigned normalizzati, DEC usa valori signed.
 // Unità interna: arcsec * 100 (0.01 arcsec di risoluzione)
 inline void encode32(uint32_t val, uint16_t &hi, uint16_t &lo) {
     hi = (uint16_t)(val >> 16);
@@ -46,4 +47,12 @@ inline void encode32(uint32_t val, uint16_t &hi, uint16_t &lo) {
 
 inline uint32_t decode32(uint16_t hi, uint16_t lo) {
     return ((uint32_t)hi << 16) | lo;
+}
+
+inline void encode32Signed(int32_t val, uint16_t &hi, uint16_t &lo) {
+    encode32((uint32_t)val, hi, lo);
+}
+
+inline int32_t decode32Signed(uint16_t hi, uint16_t lo) {
+    return (int32_t)decode32(hi, lo);
 }

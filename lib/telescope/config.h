@@ -29,6 +29,10 @@ constexpr uint8_t FOCUS_STEP   = PB13;
 constexpr uint8_t FOCUS_DIR    = PB14;
 constexpr uint8_t FOCUS_EN     = PB15;
 
+// Emergency stop hardwired input. Active LOW with internal pull-up enabled.
+constexpr uint8_t ESTOP_PIN          = PA0;
+constexpr uint8_t ESTOP_ACTIVE_STATE = LOW;
+
 // ── Modbus — Serial1 (USART1) ─────────────────────────────────────────────
 // PA9=TX, PA10=RX  (hardware USART1)
 #define MODBUS_BAUDRATE 57600

@@ -8,10 +8,6 @@ ModbusSlave::ModbusSlave(uint16_t* registers, uint8_t numRegs,
 void ModbusSlave::begin(uint32_t baud) {
     _serial.begin(baud, SERIAL_8N1);
     delay(100);
-    // Test byte per byte
-    _serial.write((uint8_t)0xAA);
-    _serial.write((uint8_t)0x55);
-    _serial.flush();
 }
 
 void ModbusSlave::update() {
