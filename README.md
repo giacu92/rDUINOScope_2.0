@@ -52,6 +52,16 @@ namespace Reg {
 ```
 Example: 180.0 degrees RA = 180 * 3600 * 100 = 64,800,000 arcsec*100
 
+Command values written to `COMMAND` (`40005`):
+
+| Value | Name          | Behavior |
+| :---- | :------------ | :------- |
+| 0     | IDLE          | No new command |
+| 1     | GOTO          | Move once to `TARGET_RA/DEC`, then start sidereal tracking |
+| 2     | STOP          | Controlled decelerated stop |
+| 3     | SYNC          | Set current position to `TARGET_RA/DEC`, then start tracking |
+| 4     | FOLLOW_TARGET | Manual mode: continuously follow changes in `TARGET_RA/DEC` without auto-tracking on arrival |
+
 ### Modbus Slave: `lib/Modbus/modbus_slave.h/cpp`
 Implements Modbus RTU FC03 (read), FC06 (write single), FC16 (write multiple) with CRC16.
 
@@ -89,6 +99,16 @@ ___
  	axisRA.moveTo(axisRA.currentPosition() + STEPS_PER_REV * 100);  // Very long move
 	```
 7. **STATUS = TRACKING** — RA axis continuously rotates to follow Earth rotation
+
+### Manual Target Follow
+Writing `COMMAND=4` enables manual/follow mode. In this mode the STM32 keeps polling
+`TARGET_RA_*` and `TARGET_DEC_*`; whenever either target differs from the last accepted
+target, it updates the AccelStepper destination with `moveTo()`.
+
+Unlike `GOTO`, this mode does not automatically start sidereal tracking when the motors
+reach the current target. The ESP32 can therefore stream small RA/DEC updates from a
+joystick, buttons, or another manual-control UI until it writes `STOP`, `GOTO`, `SYNC`,
+or `IDLE`.
 
 ### STOP Commands
 The firmware separates controlled stops from hard emergency stops:

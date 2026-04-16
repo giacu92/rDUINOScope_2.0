@@ -27,6 +27,7 @@ namespace Cmd {
     constexpr uint16_t GOTO  = 1;
     constexpr uint16_t STOP  = 2;
     constexpr uint16_t SYNC  = 3;  // "qui punta già a queste coordinate"
+    constexpr uint16_t FOLLOW_TARGET = 4;  // manual mode: follow TARGET_RA/DEC updates
 }
 
 // Stati (registro STATUS)

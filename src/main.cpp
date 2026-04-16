@@ -167,6 +167,47 @@ void stopTracking() {
     #endif
 }
 
+// ── Target da registri Modbus ────────────────────────────────────────────────
+void readTargetRegisters(uint32_t& ra, int32_t& dec) {
+    ra  = normalizeRAArcsec100(
+        decode32(regs[Reg::TARGET_RA_HI], regs[Reg::TARGET_RA_LO]));
+    dec = decode32Signed(regs[Reg::TARGET_DEC_HI], regs[Reg::TARGET_DEC_LO]);
+}
+
+bool targetRegistersChanged() {
+    uint32_t ra;
+    int32_t dec;
+    readTargetRegisters(ra, dec);
+    return ra != targetRAArcsec100 || dec != targetDECArcsec100;
+}
+
+void moveToTargetRegisters(bool trackOnArrival) {
+    uint32_t ra;
+    int32_t dec;
+    readTargetRegisters(ra, dec);
+
+    targetRAArcsec100  = ra;
+    targetDECArcsec100 = dec;
+    setMotorOutputsEnabled(true);
+    gotoInProgress = trackOnArrival;
+    softStopInProgress = false;
+
+    stopTracking();
+    axisRA.setMaxSpeed(MAX_SPEED);
+    axisRA.setAcceleration(ACCELERATION);
+    axisDEC.setMaxSpeed(MAX_SPEED);
+    axisDEC.setAcceleration(ACCELERATION);
+    axisRA.moveTo(arcsec100ToSteps(targetRAArcsec100));
+    axisDEC.moveTo(arcsec100ToSteps(targetDECArcsec100));
+    regs[Reg::STATUS] = Status::SLEWING;
+
+    #ifdef DEBUG_SERIAL
+        Serial.printf("[CMD] %s RA=%lu DEC=%ld\n",
+                      trackOnArrival ? "GOTO" : "FOLLOW",
+                      (unsigned long)ra, (long)dec);
+    #endif
+}
+
 // ── Aggiornamento posizione e stato ──────────────────────────────────────────
 void updatePositionRegisters() {
 
@@ -317,25 +358,13 @@ void loop() {
         lastCmd = cmd;
         switch (cmd) {
 
-            case Cmd::GOTO: {
-                uint32_t ra  = decode32(regs[Reg::TARGET_RA_HI],  regs[Reg::TARGET_RA_LO]);
-                int32_t dec = decode32Signed(regs[Reg::TARGET_DEC_HI], regs[Reg::TARGET_DEC_LO]);
-                targetRAArcsec100  = normalizeRAArcsec100(ra);
-                targetDECArcsec100 = dec;
-                setMotorOutputsEnabled(true);
-                gotoInProgress = true;
-                softStopInProgress = false;
-                stopTracking();
-                axisRA.setMaxSpeed(MAX_SPEED);
-                axisRA.setAcceleration(ACCELERATION);
-                axisRA.moveTo(arcsec100ToSteps(targetRAArcsec100));
-                axisDEC.moveTo(arcsec100ToSteps(targetDECArcsec100));
-                regs[Reg::STATUS] = Status::SLEWING;
-                #ifdef DEBUG_SERIAL
-                    Serial.printf("[CMD] GOTO RA=%lu DEC=%ld\n", ra, (long)dec);
-                #endif
+            case Cmd::GOTO:
+                moveToTargetRegisters(true);
                 break;
-            }
+
+            case Cmd::FOLLOW_TARGET:
+                moveToTargetRegisters(false);
+                break;
 
             case Cmd::STOP:
                 controlledMotorStop();
@@ -365,6 +394,10 @@ void loop() {
                 break;
             }
         }
+    }
+
+    if (cmd == Cmd::FOLLOW_TARGET && targetRegistersChanged()) {
+        moveToTargetRegisters(false);
     }
 
     // 3. Avvia tracking automatico al termine del GOTO
