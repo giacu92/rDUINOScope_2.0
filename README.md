@@ -62,8 +62,9 @@ namespace Reg {
 
     // Handshake bit: ESP32 sets this to 1 after writing REQ_COMMAND; STM32 clears it.
     constexpr uint16_t REQ_COMMAND_PENDING = 17; // 40018 - 1=command pending; STM32 clears after consuming
+    constexpr uint16_t RES_STM32_FW_VERSION = 18; // 40019 - STM32 firmware version, 0xMMmm
 
-    constexpr uint16_t TOTAL           = 18;
+    constexpr uint16_t TOTAL           = 19;
 }
 ```
 Example: 180.0 degrees RA = 180 * 3600 * 100 = 64,800,000 arcsec*100
@@ -86,6 +87,10 @@ Command values written to `REQ_COMMAND` (`40005`):
 command by setting `REQ_COMMAND_PENDING=1`; STM32 copies `REQ_COMMAND`, clears
 `REQ_COMMAND_PENDING` back to `0`, and executes the local copy. Repeated
 identical commands therefore do not depend on timed command pulses.
+
+`RES_STM32_FW_VERSION` exposes the STM32 firmware version as `0xMMmm`, where
+the high byte is the major version and the low byte is the minor version. For
+example, `0x0200` means `2.0`.
 
 Status values returned in `RES_STATUS` (`40006`):
 

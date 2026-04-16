@@ -476,6 +476,7 @@ void setup() {
     regs[Reg::REQ_TRACKING_MODE] = TrackingMode::SIDEREAL;
     regs[Reg::REQ_MOTORS_ENABLE] = 1;
     regs[Reg::REQ_JOG_SPEED] = JogSpeed::CENTER;
+    regs[Reg::RES_STM32_FW_VERSION] = STM32_FIRMWARE_VERSION;
     motorsEnabled = true;
     trackingMode = regs[Reg::REQ_TRACKING_MODE];
     setMotorOutputsEnabled(true);

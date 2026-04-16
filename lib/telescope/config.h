@@ -40,6 +40,9 @@ constexpr uint8_t MODBUS_RX_PIN = PA10;
 constexpr uint8_t MODBUS_TX_PIN = PA9;
 constexpr uint8_t RS485_DE_PIN  = PA15;  // #ifdef USE_RS485
 
+// Firmware version exposed through Modbus as 0xMMmm (major.minor).
+constexpr uint16_t STM32_FIRMWARE_VERSION = 0x0200;
+
 // ── TMC UART — Serial6 (USART6) ──────────────────────────────────────────
 // PA11=TX, PA12=RX  (hardware USART6, USB OTG non usata)
 // Single-wire half-duplex: collega PA11 e PA12 insieme → pin PDN_UART del TMC

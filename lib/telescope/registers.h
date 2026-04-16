@@ -29,8 +29,9 @@ namespace Reg {
     // Handshake bit: ESP32 sets this to 1 after writing REQ_COMMAND; STM32
     // clears it to 0 after copying the command.
     constexpr uint16_t REQ_COMMAND_PENDING = 17; // 40018 - 1=comando pendente; STM32 azzera dopo consumo
+    constexpr uint16_t RES_STM32_FW_VERSION = 18; // 40019 - versione firmware STM32, 0xMMmm
 
-    constexpr uint16_t TOTAL          = 18;
+    constexpr uint16_t TOTAL          = 19;
 }
 
 // Comandi (registro REQ_COMMAND)
