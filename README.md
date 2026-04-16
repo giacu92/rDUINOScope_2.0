@@ -32,7 +32,7 @@ Pin assignments and mechanical constants are here.
 ### Register Map: lib/telescope/registers.h
 Modbus register layout shared between Motor Control MCU (STM32F401CD) and Main Interface MCU (ESP32-S3). Coordinates are stored as `arcsec * 100` split across two 16-bit registers.
 
-The register boundary includes both coordinate exchange and high-level mount controls. The ESP32 writes intent into request registers; the STM32 remains responsible for pulse generation, ramps, limits, stop behavior, and driver safety. `REQ_*` registers are Modbus Master-owned requests. `RES_*` registers are Modbus Slave-owned responses. STM32 observes `REQ_COMMAND` changes and executes the requested command, but it never writes or clears request registers after boot-time defaults are initialized.
+The register boundary includes both coordinate exchange and high-level mount controls. The ESP32 writes intent into request registers; the STM32 remains responsible for pulse generation, ramps, limits, stop behavior, and driver safety. `REQ_*` registers are Modbus Master-side requests. `RES_*` registers are Modbus Slave-side responses. `REQ_COMMAND_PENDING` is the handshake bit: ESP32 sets it to `1`, STM32 clears it after copying `REQ_COMMAND`.
 
 ```cpp 
 //File: registers.h
@@ -60,7 +60,10 @@ namespace Reg {
     constexpr uint16_t REQ_JOG_DIRECTION   = 15; // 40016 - 0=negative/west/south, 1=positive/east/north
     constexpr uint16_t REQ_JOG_SPEED       = 16; // 40017 - STM32-defined jog speed/profile
 
-    constexpr uint16_t TOTAL           = 17;
+    // Handshake bit: ESP32 sets this to 1 after writing REQ_COMMAND; STM32 clears it.
+    constexpr uint16_t REQ_COMMAND_PENDING = 17; // 40018 - 1=command pending; STM32 clears after consuming
+
+    constexpr uint16_t TOTAL           = 18;
 }
 ```
 Example: 180.0 degrees RA = 180 * 3600 * 100 = 64,800,000 arcsec*100
@@ -79,9 +82,10 @@ Command values written to `REQ_COMMAND` (`40005`):
 | 7     | JOG_START     | Start manual jog using `REQ_JOG_AXIS`, `REQ_JOG_DIRECTION`, and `REQ_JOG_SPEED` |
 | 8     | JOG_STOP      | Stop the active manual jog with a ramp |
 
-`REQ_COMMAND` is treated as read-only by STM32 firmware. ESP32 owns transitions such
-as `IDLE -> GOTO -> IDLE`; STM32 uses those transitions to avoid executing the
-same request repeatedly.
+`REQ_COMMAND` may remain at the last requested command. ESP32 signals a new
+command by setting `REQ_COMMAND_PENDING=1`; STM32 copies `REQ_COMMAND`, clears
+`REQ_COMMAND_PENDING` back to `0`, and executes the local copy. Repeated
+identical commands therefore do not depend on timed command pulses.
 
 Status values returned in `RES_STATUS` (`40006`):
 
@@ -135,8 +139,8 @@ Non-blocking state machine blinks PC13 without any delay() calls:
 Each `update()` call takes microseconds — just checks elapsed time and toggles GPIO.
 ___
 ## Command Flow: How GOTO Works
-1. **ESP32** writes RA/DEC target and `REQ_COMMAND=1` to Modbus registers
-2. **STM32** observes the `REQ_COMMAND=1` transition and starts the GOTO without modifying `REQ_COMMAND`
+1. **ESP32** writes RA/DEC target, `REQ_COMMAND=1`, and `REQ_COMMAND_PENDING=1` to Modbus registers
+2. **STM32** consumes the pending command, clears `REQ_COMMAND_PENDING`, and starts the GOTO without modifying `REQ_COMMAND`
 3. **AccelStepper starts** both motors with trapezoidal velocity profile:
 	- Accelerate at 500 steps/s² up to MAX_SPEED (2000 steps/s)
 	- Coast at constant speed
@@ -217,7 +221,7 @@ The firmware separates controlled stops from hard emergency stops:
 | PA0 hard stop | Immediate stop, no decel ramp | RA/DEC drivers are disabled | Current RA/DEC is saved immediately |
 
 #### Modbus Controlled STOP
-Writing `REQ_COMMAND=2` to register `40005` requests a controlled stop. STM32 observes the request without clearing `REQ_COMMAND`. This is intended for the ESP32 or any Modbus master that wants to interrupt a GOTO or tracking without dropping motor holding torque.
+Writing `REQ_COMMAND=2` to register `40005`, then `REQ_COMMAND_PENDING=1` to register `40018`, requests a controlled stop. STM32 consumes the pending request without clearing `REQ_COMMAND`. This is intended for the ESP32 or any Modbus master that wants to interrupt a GOTO or tracking without dropping motor holding torque.
 
 Behavior:
 
@@ -330,16 +334,17 @@ Request (read registers 40007-40008):
 Response: `01 03 04 03D5 9000 xxxx` = RA coordinate 180.0 degrees
 
 ### Send GOTO Command
-Write registers 40001-40005 with RA=180.0°, DEC=-5.0°, REQ_COMMAND=1:
+Write registers 40001-40005 with RA=180.0°, DEC=-5.0°, REQ_COMMAND=1, then set REQ_COMMAND_PENDING=1:
 
 ``` Code
 RA  = 180.0 * 3600 * 100 = 64800000   = 0x03D5_C500
 DEC = -5.0  * 3600 * 100 = -1800000   = 0xFFE4_88C0
 ```
 Frame: 01 10 0000 0005 0A 03D5 9000 FFE4 88C0 0001 xxxx
+Pending frame: 01 06 0011 0001 xxxx
 ___
 ### Send Controlled STOP Command
-Write `REQ_COMMAND=2` to register `40005`:
+Write `REQ_COMMAND=2` to register `40005`, then set `REQ_COMMAND_PENDING=1`:
 
 ``` Code
 01 06 00 04 00 02 xxxx
@@ -349,6 +354,10 @@ Write `REQ_COMMAND=2` to register `40005`:
 │  │  └───────────── Function = 06 (write single register)
 │  └──────────────── Slave ID = 1
 └─────────────────── CRC omitted here as xxxx
+```
+
+``` Code
+01 06 00 11 00 01 xxxx
 ```
 
 After this command, wait for `RES_STATUS=IDLE`, then read `RES_CURRENT_RA_*` and `RES_CURRENT_DEC_*` to get the final stopped position.
@@ -367,18 +376,20 @@ This writes:
 | `REQ_TRACKING_ENABLE` (`40012`) | `1` |
 | `REQ_TRACKING_MODE` (`40013`) | `1` sidereal |
 
-Then write `REQ_COMMAND=5` to register `40005`:
+Then write `REQ_COMMAND=5` to register `40005` and set `REQ_COMMAND_PENDING=1`:
 
 ``` Code
 01 06 00 04 00 05 xxxx
+01 06 00 11 00 01 xxxx
 ```
 
 ### Disable Motors
-Write `REQ_MOTORS_ENABLE=0`, then write `REQ_COMMAND=6`:
+Write `REQ_MOTORS_ENABLE=0`, then write `REQ_COMMAND=6` and set `REQ_COMMAND_PENDING=1`:
 
 ``` Code
 01 06 00 0D 00 00 xxxx
 01 06 00 04 00 06 xxxx
+01 06 00 11 00 01 xxxx
 ```
 
 STM32 disables RA/DEC drivers and reports `RES_STATUS=MOTORS_DISABLED`.
@@ -389,6 +400,7 @@ Start a positive RA jog at center speed:
 ``` Code
 01 10 000E 0003 06 0000 0001 0002 xxxx
 01 06 00 04 00 07 xxxx
+01 06 00 11 00 01 xxxx
 ```
 
 This writes:
@@ -403,6 +415,7 @@ Stop the active jog:
 
 ``` Code
 01 06 00 04 00 08 xxxx
+01 06 00 11 00 01 xxxx
 ```
 
 STM32 ramps down, saves the reached position, and returns to `RES_STATUS=IDLE`.

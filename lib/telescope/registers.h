@@ -26,7 +26,11 @@ namespace Reg {
     constexpr uint16_t REQ_JOG_DIRECTION   = 15; // 40016 - 0=negative/west/south, 1=positive/east/north
     constexpr uint16_t REQ_JOG_SPEED       = 16; // 40017 - profilo velocita definito da STM32
 
-    constexpr uint16_t TOTAL          = 17;
+    // Handshake bit: ESP32 sets this to 1 after writing REQ_COMMAND; STM32
+    // clears it to 0 after copying the command.
+    constexpr uint16_t REQ_COMMAND_PENDING = 17; // 40018 - 1=comando pendente; STM32 azzera dopo consumo
+
+    constexpr uint16_t TOTAL          = 18;
 }
 
 // Comandi (registro REQ_COMMAND)

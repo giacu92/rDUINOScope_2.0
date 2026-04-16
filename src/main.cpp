@@ -515,11 +515,10 @@ void loop() {
     }
 
     // 2. Comandi
-    static uint16_t lastCmd = Cmd::IDLE;
-    uint16_t cmd = regs[Reg::REQ_COMMAND];
+    if (regs[Reg::REQ_COMMAND_PENDING] != 0) {
+        uint16_t cmd = regs[Reg::REQ_COMMAND];
+        regs[Reg::REQ_COMMAND_PENDING] = 0;
 
-    if (cmd != lastCmd) {
-        lastCmd = cmd;
         switch (cmd) {
 
             case Cmd::GOTO:
