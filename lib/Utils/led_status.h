@@ -38,6 +38,16 @@ public:
                 errorBlink(now, 3, 100, 1000);
                 break;
 
+            case Status::MOTORS_DISABLED:
+                // Blink lento: mount alimentato ma driver disabilitati.
+                blink(now, 200, 1800);
+                break;
+
+            case Status::MANUAL_JOG:
+                // Jog manuale: blink piu rapido dello slew.
+                blink(now, 75, 75);
+                break;
+
             default:
                 // STOP o sconosciuto → LED spento
                 ledOff();

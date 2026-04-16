@@ -40,6 +40,10 @@ bool trackingActive = false;
 bool gotoInProgress = false;
 bool followTrackingEnabled = false;
 bool softStopInProgress = false;
+bool motorsEnabled = true;
+bool manualJogActive = false;
+uint16_t trackingMode = TrackingMode::SIDEREAL;
+uint16_t activeJogAxis = JogAxis::RA_AXIS;
 LedStatus ledStatus;
 
 uint32_t currentRAArcsec100  = 0;
@@ -63,6 +67,30 @@ inline uint32_t normalizeRAArcsec100(int32_t arcsec100) {
     return (uint32_t)normalized;
 }
 
+float trackingRateForMode(uint16_t mode) {
+    switch (mode) {
+        case TrackingMode::LUNAR:
+            return SIDEREAL_RATE_HZ * 0.963f;
+        case TrackingMode::SOLAR:
+            return (float)STEPS_PER_REV / 86400.0f;
+        case TrackingMode::SIDEREAL:
+        default:
+            return SIDEREAL_RATE_HZ;
+    }
+}
+
+float jogSpeedForProfile(uint16_t profile) {
+    switch (profile) {
+        case JogSpeed::GUIDE:
+            return max(10.0f, SIDEREAL_RATE_HZ * 8.0f);
+        case JogSpeed::CENTER:
+            return MAX_SPEED * 0.25f;
+        case JogSpeed::SLEW:
+        default:
+            return MAX_SPEED;
+    }
+}
+
 // Motori / emergency stop
 void setMotorOutputsEnabled(bool enabled) {
     // TMC EN is active LOW.
@@ -83,6 +111,9 @@ void immediateMotorStop() {
     gotoInProgress = false;
     followTrackingEnabled = false;
     softStopInProgress = false;
+    manualJogActive = false;
+    motorsEnabled = false;
+    regs[Reg::TRACKING_ENABLE] = 0;
     setMotorOutputsEnabled(false);
 
     currentRAArcsec100  = normalizeRAArcsec100(stepsToArcsec100(raNow));
@@ -92,7 +123,8 @@ void immediateMotorStop() {
     encode32(currentRAArcsec100,  regs[Reg::CURRENT_RA_HI],  regs[Reg::CURRENT_RA_LO]);
     encode32Signed(currentDECArcsec100, regs[Reg::CURRENT_DEC_HI], regs[Reg::CURRENT_DEC_LO]);
 
-    regs[Reg::STATUS]     = Status::IDLE;
+    regs[Reg::MOTORS_ENABLE] = 0;
+    regs[Reg::STATUS]     = Status::MOTORS_DISABLED;
     regs[Reg::ERROR_CODE] = 0x00;
 }
 
@@ -106,12 +138,16 @@ void saveCurrentStepperPosition() {
 }
 
 void controlledMotorStop() {
-    setMotorOutputsEnabled(true);
+    if (motorsEnabled) {
+        setMotorOutputsEnabled(true);
+    }
 
     trackingActive = false;
     gotoInProgress = false;
     followTrackingEnabled = false;
+    manualJogActive = false;
     softStopInProgress = true;
+    regs[Reg::TRACKING_ENABLE] = 0;
 
     axisRA.setMaxSpeed(MAX_SPEED);
     axisRA.setAcceleration(ACCELERATION);
@@ -149,14 +185,22 @@ int32_t encoderToSteps(AMS_AS5048B& enc, float& lastAngle, int32_t& accumSteps) 
 
 // ── Tracking siderale ────────────────────────────────────────────────────────
 void startTracking() {
+    if (!motorsEnabled) {
+        regs[Reg::STATUS] = Status::MOTORS_DISABLED;
+        return;
+    }
+
     setMotorOutputsEnabled(true);
     softStopInProgress = false;
-    axisRA.setMaxSpeed(SIDEREAL_RATE_HZ);
+    manualJogActive = false;
+    float rate = trackingRateForMode(trackingMode);
+    axisRA.setMaxSpeed(rate);
     axisRA.setAcceleration(10.0f);
     axisRA.moveTo(axisRA.currentPosition() - (long)STEPS_PER_REV * 1000L);
     trackingActive = true;
+    regs[Reg::TRACKING_ENABLE] = 1;
     #ifdef DEBUG_SERIAL
-        Serial.println("[TRACK] Sidereal tracking started");
+        Serial.printf("[TRACK] mode=%u rate=%.3f steps/s\n", trackingMode, rate);
     #endif
 }
 
@@ -165,6 +209,7 @@ void stopTracking() {
     axisRA.setAcceleration(ACCELERATION);
     axisRA.stop();
     trackingActive = false;
+    regs[Reg::TRACKING_ENABLE] = 0;
     #ifdef DEBUG_SERIAL
         Serial.println("[TRACK] Stopped");
     #endif
@@ -185,6 +230,14 @@ bool targetRegistersChanged() {
 }
 
 void moveToTargetRegisters(bool trackOnArrival, const char* commandName) {
+    if (!motorsEnabled) {
+        regs[Reg::STATUS] = Status::MOTORS_DISABLED;
+        #ifdef DEBUG_SERIAL
+            Serial.printf("[CMD] %s ignored: motors disabled\n", commandName);
+        #endif
+        return;
+    }
+
     uint32_t ra;
     int32_t dec;
     readTargetRegisters(ra, dec);
@@ -194,6 +247,7 @@ void moveToTargetRegisters(bool trackOnArrival, const char* commandName) {
     setMotorOutputsEnabled(true);
     gotoInProgress = trackOnArrival;
     softStopInProgress = false;
+    manualJogActive = false;
 
     stopTracking();
     axisRA.setMaxSpeed(MAX_SPEED);
@@ -207,6 +261,113 @@ void moveToTargetRegisters(bool trackOnArrival, const char* commandName) {
     #ifdef DEBUG_SERIAL
         Serial.printf("[CMD] %s RA=%lu DEC=%ld\n",
                       commandName, (unsigned long)ra, (long)dec);
+    #endif
+}
+
+// ── Comandi mount Milestone 0 ────────────────────────────────────────────────
+void setTrackingFromRegisters() {
+    trackingMode = regs[Reg::TRACKING_MODE];
+    if (trackingMode > TrackingMode::SOLAR) {
+        trackingMode = TrackingMode::SIDEREAL;
+        regs[Reg::TRACKING_MODE] = trackingMode;
+    }
+
+    if (regs[Reg::TRACKING_ENABLE] != 0) {
+        startTracking();
+    } else {
+        controlledMotorStop();
+    }
+
+    #ifdef DEBUG_SERIAL
+        Serial.printf("[CMD] SET_TRACKING enable=%u mode=%u\n",
+                      regs[Reg::TRACKING_ENABLE], trackingMode);
+    #endif
+}
+
+void setMotorsFromRegisters() {
+    motorsEnabled = regs[Reg::MOTORS_ENABLE] != 0;
+
+    if (motorsEnabled) {
+        setMotorOutputsEnabled(true);
+        manualJogActive = false;
+        softStopInProgress = false;
+        if (!trackingActive && !gotoInProgress) {
+            regs[Reg::STATUS] = Status::IDLE;
+        }
+    } else {
+        long raNow  = axisRA.currentPosition();
+        long decNow = axisDEC.currentPosition();
+
+        trackingActive = false;
+        gotoInProgress = false;
+        followTrackingEnabled = false;
+        softStopInProgress = false;
+        manualJogActive = false;
+        regs[Reg::TRACKING_ENABLE] = 0;
+        axisRA.moveTo(raNow);
+        axisDEC.moveTo(decNow);
+        setMotorOutputsEnabled(false);
+        saveCurrentStepperPosition();
+        regs[Reg::STATUS] = Status::MOTORS_DISABLED;
+    }
+
+    #ifdef DEBUG_SERIAL
+        Serial.printf("[CMD] SET_MOTORS enable=%u\n", regs[Reg::MOTORS_ENABLE]);
+    #endif
+}
+
+void startJogFromRegisters() {
+    if (!motorsEnabled) {
+        regs[Reg::STATUS] = Status::MOTORS_DISABLED;
+        return;
+    }
+
+    uint16_t axis = regs[Reg::JOG_AXIS];
+    uint16_t direction = regs[Reg::JOG_DIRECTION];
+    float speed = jogSpeedForProfile(regs[Reg::JOG_SPEED]);
+    long jogDistance = (direction == JogDirection::POSITIVE)
+                         ? (long)STEPS_PER_REV * 1000L
+                         : -(long)STEPS_PER_REV * 1000L;
+
+    controlledMotorStop();
+    softStopInProgress = false;
+    setMotorOutputsEnabled(true);
+
+    if (axis == JogAxis::DEC_AXIS) {
+        activeJogAxis = JogAxis::DEC_AXIS;
+        axisDEC.setMaxSpeed(speed);
+        axisDEC.setAcceleration(ACCELERATION);
+        axisDEC.moveTo(axisDEC.currentPosition() + jogDistance);
+    } else {
+        activeJogAxis = JogAxis::RA_AXIS;
+        axisRA.setMaxSpeed(speed);
+        axisRA.setAcceleration(ACCELERATION);
+        axisRA.moveTo(axisRA.currentPosition() + jogDistance);
+    }
+
+    manualJogActive = true;
+    regs[Reg::STATUS] = Status::MANUAL_JOG;
+
+    #ifdef DEBUG_SERIAL
+        Serial.printf("[CMD] JOG_START axis=%u dir=%u speedProfile=%u speed=%.1f\n",
+                      axis, direction, regs[Reg::JOG_SPEED], speed);
+    #endif
+}
+
+void stopJog() {
+    if (!manualJogActive) return;
+
+    if (activeJogAxis == JogAxis::DEC_AXIS) {
+        axisDEC.stop();
+    } else {
+        axisRA.stop();
+    }
+
+    manualJogActive = false;
+    softStopInProgress = true;
+
+    #ifdef DEBUG_SERIAL
+        Serial.println("[CMD] JOG_STOP");
     #endif
 }
 
@@ -285,12 +446,14 @@ void updatePositionRegisters() {
     }
     #endif
 
-    bool slewing = (!trackingActive && axisRA.distanceToGo()  != 0)
-                ||  (axisDEC.distanceToGo() != 0);
+    bool slewing = (!trackingActive && !manualJogActive && axisRA.distanceToGo()  != 0)
+                ||  (!manualJogActive && axisDEC.distanceToGo() != 0);
 
-    if      (slewing)        regs[Reg::STATUS] = Status::SLEWING;
-    else if (trackingActive) regs[Reg::STATUS] = Status::TRACKING;
-    else                     regs[Reg::STATUS] = Status::IDLE;
+    if      (!motorsEnabled)    regs[Reg::STATUS] = Status::MOTORS_DISABLED;
+    else if (manualJogActive)   regs[Reg::STATUS] = Status::MANUAL_JOG;
+    else if (slewing)           regs[Reg::STATUS] = Status::SLEWING;
+    else if (trackingActive)    regs[Reg::STATUS] = Status::TRACKING;
+    else                        regs[Reg::STATUS] = Status::IDLE;
 
     regs[Reg::ERROR_CODE] = 0x00;
 }
@@ -316,6 +479,12 @@ void setup() {
     pinMode(ESTOP_PIN, INPUT_PULLUP);
     pinMode(RA_EN,  OUTPUT);
     pinMode(DEC_EN, OUTPUT);
+    regs[Reg::TRACKING_ENABLE] = 0;
+    regs[Reg::TRACKING_MODE] = TrackingMode::SIDEREAL;
+    regs[Reg::MOTORS_ENABLE] = 1;
+    regs[Reg::JOG_SPEED] = JogSpeed::CENTER;
+    motorsEnabled = true;
+    trackingMode = regs[Reg::TRACKING_MODE];
     setMotorOutputsEnabled(true);
 
     axisRA.setMaxSpeed(MAX_SPEED);
@@ -358,11 +527,13 @@ void loop() {
 
     if (cmd != lastCmd) {
         lastCmd = cmd;
+        bool clearCommand = false;
         switch (cmd) {
 
             case Cmd::GOTO:
                 followTrackingEnabled = false;
                 moveToTargetRegisters(true, "GOTO");
+                clearCommand = true;
                 break;
 
             case Cmd::FOLLOW_TARGET:
@@ -375,9 +546,30 @@ void loop() {
             case Cmd::STOP:
                 followTrackingEnabled = false;
                 controlledMotorStop();
+                clearCommand = true;
                 #ifdef DEBUG_SERIAL
                     Serial.println("[CMD] STOP");
                 #endif
+                break;
+
+            case Cmd::SET_TRACKING:
+                setTrackingFromRegisters();
+                clearCommand = true;
+                break;
+
+            case Cmd::SET_MOTORS:
+                setMotorsFromRegisters();
+                clearCommand = true;
+                break;
+
+            case Cmd::JOG_START:
+                startJogFromRegisters();
+                clearCommand = true;
+                break;
+
+            case Cmd::JOG_STOP:
+                stopJog();
+                clearCommand = true;
                 break;
 
             case Cmd::SYNC: {
@@ -399,8 +591,14 @@ void loop() {
                 #ifdef DEBUG_SERIAL
                     Serial.printf("[CMD] SYNC RA=%ld DEC=%ld steps\n", raSteps, decSteps);
                 #endif
+                clearCommand = true;
                 break;
             }
+        }
+
+        if (clearCommand) {
+            regs[Reg::COMMAND] = Cmd::IDLE;
+            lastCmd = Cmd::IDLE;
         }
     }
 

@@ -30,24 +30,37 @@ Pin assignments and mechanical constants are here.
 
 
 ### Register Map: lib/telescope/registers.h
-Modbus register layout shared between Motor Control MCU (STM32F401CD) and Main Interface MCU (ESP32-S3). Coordinates are stored as `arcsec * 100` split across two 16-bit registers:
+Modbus register layout shared between Motor Control MCU (STM32F401CD) and Main Interface MCU (ESP32-S3). Coordinates are stored as `arcsec * 100` split across two 16-bit registers.
+
+The register boundary includes both coordinate exchange and high-level mount controls. The ESP32 writes intent into these registers; the STM32 remains responsible for pulse generation, ramps, limits, stop behavior, and driver safety.
+
 ```cpp 
 //File: registers.h
 namespace Reg {
-    // --- STM32F401 Read-Only regs ---
+    // --- Written by ESP32 master ---
     constexpr uint16_t TARGET_RA_HI   = 0;  // 40001 - RA target, word alta
     constexpr uint16_t TARGET_RA_LO   = 1;  // 40002 - RA target, word bassa
     constexpr uint16_t TARGET_DEC_HI  = 2;  // 40003 - DEC target, word alta
     constexpr uint16_t TARGET_DEC_LO  = 3;  // 40004 - DEC target, word bassa
     constexpr uint16_t COMMAND        = 4;  // 40005 - comando
 
-	// --- STM32F401 Write-Only regs ---
+    // --- Read by ESP32 master ---
     constexpr uint16_t STATUS         = 5;  // 40006 - stato telescopio
     constexpr uint16_t CURRENT_RA_HI  = 6;  // 40007
     constexpr uint16_t CURRENT_RA_LO  = 7;  // 40008
     constexpr uint16_t CURRENT_DEC_HI = 8;  // 40009
     constexpr uint16_t CURRENT_DEC_LO = 9;  // 40010
     constexpr uint16_t ERROR_CODE     = 10; // 40011
+
+    // --- Mount controls written by ESP32 ---
+    constexpr uint16_t TRACKING_ENABLE = 11; // 40012 - 0=off, 1=on
+    constexpr uint16_t TRACKING_MODE   = 12; // 40013 - 0=lunar, 1=sidereal, 2=solar
+    constexpr uint16_t MOTORS_ENABLE   = 13; // 40014 - 0=disabled, 1=enabled
+    constexpr uint16_t JOG_AXIS        = 14; // 40015 - 0=RA, 1=DEC
+    constexpr uint16_t JOG_DIRECTION   = 15; // 40016 - 0=negative/west/south, 1=positive/east/north
+    constexpr uint16_t JOG_SPEED       = 16; // 40017 - STM32-defined jog speed/profile
+
+    constexpr uint16_t TOTAL           = 17;
 }
 ```
 Example: 180.0 degrees RA = 180 * 3600 * 100 = 64,800,000 arcsec*100
@@ -57,10 +70,41 @@ Command values written to `COMMAND` (`40005`):
 | Value | Name          | Behavior |
 | :---- | :------------ | :------- |
 | 0     | IDLE          | No new command |
-| 1     | GOTO          | Move once to `TARGET_RA/DEC`, then start sidereal tracking |
-| 2     | STOP          | Controlled decelerated stop |
+| 1     | GOTO          | Move once to `TARGET_RA/DEC`, then start tracking |
+| 2     | STOP          | Controlled decelerated priority stop |
 | 3     | SYNC          | Set current position to `TARGET_RA/DEC`, then start tracking |
-| 4     | FOLLOW_TARGET | Manual mode: continuously follow changes in `TARGET_RA/DEC`, preserving the current tracking state |
+| 4     | FOLLOW_TARGET | Continuously follow changing `TARGET_RA/DEC` coordinates |
+| 5     | SET_TRACKING  | Apply `TRACKING_ENABLE` and `TRACKING_MODE` |
+| 6     | SET_MOTORS    | Apply `MOTORS_ENABLE` |
+| 7     | JOG_START     | Start manual jog using `JOG_AXIS`, `JOG_DIRECTION`, and `JOG_SPEED` |
+| 8     | JOG_STOP      | Stop the active manual jog with a ramp |
+
+Status values returned in `STATUS` (`40006`):
+
+| Value | Name             | Meaning |
+| :---- | :--------------- | :------ |
+| 0     | IDLE             | Ready/no motion |
+| 1     | SLEWING          | GOTO or target-follow movement in progress |
+| 2     | TRACKING         | Tracking active |
+| 3     | ERROR            | Position/driver fault |
+| 4     | MOTORS_DISABLED  | RA/DEC drivers disabled |
+| 5     | MANUAL_JOG       | Manual jog active |
+
+Tracking mode values in `TRACKING_MODE` (`40013`):
+
+| Value | Name     | Meaning |
+| :---- | :------- | :------ |
+| 0     | LUNAR    | Lunar tracking rate |
+| 1     | SIDEREAL | Sidereal tracking rate |
+| 2     | SOLAR    | Solar tracking rate |
+
+Jog fields:
+
+| Register | Values |
+| :------- | :----- |
+| `JOG_AXIS` | `0=RA`, `1=DEC` |
+| `JOG_DIRECTION` | `0=negative/west/south`, `1=positive/east/north` |
+| `JOG_SPEED` | `1=guide`, `2=center`, `3=slew` |
 
 ### Modbus Slave: `lib/Modbus/modbus_slave.h/cpp`
 Implements Modbus RTU FC03 (read), FC06 (write single), FC16 (write multiple) with CRC16.
@@ -79,8 +123,10 @@ Non-blocking state machine blinks PC13 without any delay() calls:
 | :------------ | :----------------------- | :----------------------- |
 | IDLE          | Solid ON                 | Ready/no motion          |
 | SLEWING       | 4 Hz blink               | GOTO in progress         |
-| TRACKING      | 0.5 Hz blink             | Sidereal tracking active |
+| TRACKING      | 0.5 Hz blink             | Tracking active          |
 | ERROR         | 3 fast blinks + 1s pause | Position/driver fault    |
+| MOTORS_DISABLED | Slow short pulse       | Motor drivers disabled   |
+| MANUAL_JOG    | Fast blink               | Manual jog active        |
 
 Each `update()` call takes microseconds — just checks elapsed time and toggles GPIO.
 ___
@@ -93,23 +139,68 @@ ___
 	- Decelerate 500 steps/s² to arrive at target with zero velocity
 4. **STATUS = SLEWING** while motors are moving
 5. Motors arrive at target, distance-to-go becomes zero
-6. **STM32** automatically transitions to sidereal tracking on RA only:
+6. **STM32** automatically transitions to the selected tracking mode on RA only:
 	```cpp
- 	axisRA.setMaxSpeed(SIDEREAL_RATE_HZ * 1.1f);  // ~5.9 Hz
- 	axisRA.moveTo(axisRA.currentPosition() + STEPS_PER_REV * 100);  // Very long move
+ 	axisRA.setMaxSpeed(trackingRateForMode(trackingMode));
+ 	axisRA.moveTo(axisRA.currentPosition() - STEPS_PER_REV * 1000L);  // Very long move
 	```
-7. **STATUS = TRACKING** — RA axis continuously rotates to follow Earth rotation
+7. **STATUS = TRACKING** - RA axis continuously rotates at lunar, sidereal, or solar rate
 
-### Manual Target Follow
-Writing `COMMAND=4` enables manual/follow mode. In this mode the STM32 keeps polling
-`TARGET_RA_*` and `TARGET_DEC_*`; whenever either target differs from the last accepted
-target, it updates the AccelStepper destination with `moveTo()`.
+### Continuous Target Follow
+Writing `COMMAND=4` enables coordinate-follow mode. In this mode the STM32 keeps
+polling `TARGET_RA_*` and `TARGET_DEC_*`; whenever either target differs from the
+last accepted target, it updates the AccelStepper destination with `moveTo()`.
 
-Unlike `GOTO`, this mode does not decide the sidereal tracking state by itself. If
-sidereal tracking was already active when `FOLLOW_TARGET` was selected, the firmware
-resumes tracking after each target correction. If tracking was off, it remains off, so
-the ESP32 can stream small RA/DEC updates from a joystick, buttons, or another
-manual-control UI until it writes `STOP`, `GOTO`, `SYNC`, or `IDLE`.
+`FOLLOW_TARGET` is for target coordinates that change over time. The ESP32 remains
+responsible for computing the next RA/DEC target, while the STM32 remains
+responsible for turning those coordinates into motor motion. This is useful for
+features such as satellite tracking, assisted guiding, or any controller that
+generates a moving coordinate target.
+
+Unlike `GOTO`, this mode does not decide the tracking state by itself. If tracking
+was already active when `FOLLOW_TARGET` was selected, the firmware resumes
+tracking after each target correction. If tracking was off, it remains off, so the
+ESP32 can choose whether target-follow corrections should blend back into normal
+tracking or remain purely positional.
+
+### Manual Jog
+Manual movement uses the dedicated jog command pair:
+
+1. ESP32 writes `JOG_AXIS`, `JOG_DIRECTION`, and `JOG_SPEED`.
+2. ESP32 pulses `COMMAND=7` (`JOG_START`).
+3. STM32 enters `STATUS=MANUAL_JOG` and moves the requested axis using its local speed profile and acceleration.
+4. On button release, ESP32 pulses `COMMAND=8` (`JOG_STOP`).
+5. STM32 ramps down, saves the reached position, and returns to `STATUS=IDLE`.
+
+Use jog for user-driven movement such as touchscreen arrows, joystick input,
+centering an object after a GOTO, or alignment workflows. The ESP32 sends only
+axis, direction, and speed intent; it does not need to stream RA/DEC coordinates
+while the button is held.
+
+`FOLLOW_TARGET` and jog are intentionally separate:
+
+| Use case | Command | Control model |
+| :------- | :------ | :------------ |
+| GOTO to one fixed coordinate | `GOTO` | Absolute RA/DEC target |
+| Dynamic coordinate target, such as satellite tracking | `FOLLOW_TARGET` | ESP32 repeatedly updates RA/DEC target |
+| Human manual movement with buttons or joystick | `JOG_START` / `JOG_STOP` | Axis, direction, and speed |
+| Immediate abort of any motion | `STOP` | Priority controlled stop |
+
+`COMMAND=2` (`STOP`) remains the priority abort path and can interrupt GOTO,
+tracking, or jog.
+
+### Tracking And Motors Commands
+The ESP32 controls tracking, motor power, and manual jog through explicit high-level commands:
+
+- `SET_TRACKING` (`COMMAND=5`) applies `TRACKING_ENABLE` and `TRACKING_MODE`.
+- `SET_MOTORS` (`COMMAND=6`) applies `MOTORS_ENABLE`.
+- `JOG_START` (`COMMAND=7`) starts manual jog with `JOG_AXIS`, `JOG_DIRECTION`, and `JOG_SPEED`.
+- `JOG_STOP` (`COMMAND=8`) stops the active jog with a ramp.
+
+When motors are disabled, STM32 de-energizes `RA_EN` and `DEC_EN`, reports
+`STATUS=MOTORS_DISABLED`, and ignores new motion requests until motors are enabled
+again. ESP32 should treat motors off as a safety/hold-torque-off state, not as a
+normal pause.
 
 ### STOP Commands
 The firmware separates controlled stops from hard emergency stops:
@@ -255,6 +346,60 @@ Write `COMMAND=2` to register `40005`:
 ```
 
 After this command, wait for `STATUS=IDLE`, then read `CURRENT_RA_*` and `CURRENT_DEC_*` to get the final stopped position.
+___
+### Enable Sidereal Tracking
+Write tracking registers, then pulse `COMMAND=5`:
+
+``` Code
+01 10 000B 0002 04 0001 0001 xxxx
+```
+
+This writes:
+
+| Register | Value |
+| :------- | :---- |
+| `TRACKING_ENABLE` (`40012`) | `1` |
+| `TRACKING_MODE` (`40013`) | `1` sidereal |
+
+Then write `COMMAND=5` to register `40005`:
+
+``` Code
+01 06 00 04 00 05 xxxx
+```
+
+### Disable Motors
+Write `MOTORS_ENABLE=0`, then pulse `COMMAND=6`:
+
+``` Code
+01 06 00 0D 00 00 xxxx
+01 06 00 04 00 06 xxxx
+```
+
+STM32 disables RA/DEC drivers and reports `STATUS=MOTORS_DISABLED`.
+
+### Manual Jog
+Start a positive RA jog at center speed:
+
+``` Code
+01 10 000E 0003 06 0000 0001 0002 xxxx
+01 06 00 04 00 07 xxxx
+```
+
+This writes:
+
+| Register | Value |
+| :------- | :---- |
+| `JOG_AXIS` (`40015`) | `0` RA |
+| `JOG_DIRECTION` (`40016`) | `1` positive/east/north |
+| `JOG_SPEED` (`40017`) | `2` center |
+
+Stop the active jog:
+
+``` Code
+01 06 00 04 00 08 xxxx
+```
+
+STM32 ramps down, saves the reached position, and returns to `STATUS=IDLE`.
 ___
 ## Future Enhancements
 - [ ] Closed-loop position correction using encoder feedback

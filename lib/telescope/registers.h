@@ -18,7 +18,15 @@ namespace Reg {
     constexpr uint16_t CURRENT_DEC_LO = 9;  // 40010
     constexpr uint16_t ERROR_CODE     = 10; // 40011
 
-    constexpr uint16_t TOTAL          = 11;
+    // --- Milestone 0: controlli mount high-level scritti da ESP32 ---
+    constexpr uint16_t TRACKING_ENABLE = 11; // 40012 - 0=off, 1=on
+    constexpr uint16_t TRACKING_MODE   = 12; // 40013 - 0=lunar, 1=sidereal, 2=solar
+    constexpr uint16_t MOTORS_ENABLE   = 13; // 40014 - 0=disabled, 1=enabled
+    constexpr uint16_t JOG_AXIS        = 14; // 40015 - 0=RA, 1=DEC
+    constexpr uint16_t JOG_DIRECTION   = 15; // 40016 - 0=negative/west/south, 1=positive/east/north
+    constexpr uint16_t JOG_SPEED       = 16; // 40017 - profilo velocita definito da STM32
+
+    constexpr uint16_t TOTAL          = 17;
 }
 
 // Comandi (registro COMMAND)
@@ -28,6 +36,12 @@ namespace Cmd {
     constexpr uint16_t STOP  = 2;
     constexpr uint16_t SYNC  = 3;  // "qui punta già a queste coordinate"
     constexpr uint16_t FOLLOW_TARGET = 4;  // manual mode: follow TARGET_RA/DEC updates
+
+    // Nuovi comandi Milestone 0. I valori 3 e 4 restano compatibili.
+    constexpr uint16_t SET_TRACKING = 5;
+    constexpr uint16_t SET_MOTORS   = 6;
+    constexpr uint16_t JOG_START    = 7;
+    constexpr uint16_t JOG_STOP     = 8;
 }
 
 // Stati (registro STATUS)
@@ -36,6 +50,30 @@ namespace Status {
     constexpr uint16_t SLEWING  = 1;
     constexpr uint16_t TRACKING = 2;
     constexpr uint16_t ERROR    = 3;
+    constexpr uint16_t MOTORS_DISABLED = 4;
+    constexpr uint16_t MANUAL_JOG      = 5;
+}
+
+namespace TrackingMode {
+    constexpr uint16_t LUNAR    = 0;
+    constexpr uint16_t SIDEREAL = 1;
+    constexpr uint16_t SOLAR    = 2;
+}
+
+namespace JogAxis {
+    constexpr uint16_t RA_AXIS  = 0;
+    constexpr uint16_t DEC_AXIS = 1;
+}
+
+namespace JogDirection {
+    constexpr uint16_t NEGATIVE = 0;
+    constexpr uint16_t POSITIVE = 1;
+}
+
+namespace JogSpeed {
+    constexpr uint16_t GUIDE  = 1;
+    constexpr uint16_t CENTER = 2;
+    constexpr uint16_t SLEW   = 3;
 }
 
 // Helper per encode/decode coordinate 32bit su due registri 16bit.
