@@ -38,6 +38,7 @@ AccelStepper axisDEC(AccelStepper::DRIVER, DEC_STEP, DEC_DIR);
 // ── Stato globale ─────────────────────────────────────────────────────────────
 bool trackingActive = false;
 bool gotoInProgress = false;
+bool followTrackingEnabled = false;
 bool softStopInProgress = false;
 LedStatus ledStatus;
 
@@ -80,6 +81,7 @@ void immediateMotorStop() {
 
     trackingActive = false;
     gotoInProgress = false;
+    followTrackingEnabled = false;
     softStopInProgress = false;
     setMotorOutputsEnabled(false);
 
@@ -108,6 +110,7 @@ void controlledMotorStop() {
 
     trackingActive = false;
     gotoInProgress = false;
+    followTrackingEnabled = false;
     softStopInProgress = true;
 
     axisRA.setMaxSpeed(MAX_SPEED);
@@ -181,7 +184,7 @@ bool targetRegistersChanged() {
     return ra != targetRAArcsec100 || dec != targetDECArcsec100;
 }
 
-void moveToTargetRegisters(bool trackOnArrival) {
+void moveToTargetRegisters(bool trackOnArrival, const char* commandName) {
     uint32_t ra;
     int32_t dec;
     readTargetRegisters(ra, dec);
@@ -203,8 +206,7 @@ void moveToTargetRegisters(bool trackOnArrival) {
 
     #ifdef DEBUG_SERIAL
         Serial.printf("[CMD] %s RA=%lu DEC=%ld\n",
-                      trackOnArrival ? "GOTO" : "FOLLOW",
-                      (unsigned long)ra, (long)dec);
+                      commandName, (unsigned long)ra, (long)dec);
     #endif
 }
 
@@ -359,14 +361,19 @@ void loop() {
         switch (cmd) {
 
             case Cmd::GOTO:
-                moveToTargetRegisters(true);
+                followTrackingEnabled = false;
+                moveToTargetRegisters(true, "GOTO");
                 break;
 
             case Cmd::FOLLOW_TARGET:
-                moveToTargetRegisters(false);
+                followTrackingEnabled = trackingActive;
+                if (targetRegistersChanged()) {
+                    moveToTargetRegisters(followTrackingEnabled, "FOLLOW");
+                }
                 break;
 
             case Cmd::STOP:
+                followTrackingEnabled = false;
                 controlledMotorStop();
                 #ifdef DEBUG_SERIAL
                     Serial.println("[CMD] STOP");
@@ -383,6 +390,7 @@ void loop() {
                 int32_t raSteps  = arcsec100ToSteps(currentRAArcsec100);
                 int32_t decSteps = arcsec100ToSteps(currentDECArcsec100);
                 gotoInProgress = false;
+                followTrackingEnabled = false;
                 softStopInProgress = false;
                 setMotorOutputsEnabled(true);
                 axisRA.setCurrentPosition(raSteps);
@@ -397,7 +405,7 @@ void loop() {
     }
 
     if (cmd == Cmd::FOLLOW_TARGET && targetRegistersChanged()) {
-        moveToTargetRegisters(false);
+        moveToTargetRegisters(followTrackingEnabled, "FOLLOW");
     }
 
     // 3. Avvia tracking automatico al termine del GOTO
