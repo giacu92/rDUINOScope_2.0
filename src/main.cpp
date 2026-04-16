@@ -113,19 +113,17 @@ void immediateMotorStop() {
     softStopInProgress = false;
     manualJogActive = false;
     motorsEnabled = false;
-    regs[Reg::TRACKING_ENABLE] = 0;
     setMotorOutputsEnabled(false);
 
     currentRAArcsec100  = normalizeRAArcsec100(stepsToArcsec100(raNow));
     currentDECArcsec100 = stepsToArcsec100(decNow);
     targetRAArcsec100   = currentRAArcsec100;
     targetDECArcsec100  = currentDECArcsec100;
-    encode32(currentRAArcsec100,  regs[Reg::CURRENT_RA_HI],  regs[Reg::CURRENT_RA_LO]);
-    encode32Signed(currentDECArcsec100, regs[Reg::CURRENT_DEC_HI], regs[Reg::CURRENT_DEC_LO]);
+    encode32(currentRAArcsec100,  regs[Reg::RES_CURRENT_RA_HI],  regs[Reg::RES_CURRENT_RA_LO]);
+    encode32Signed(currentDECArcsec100, regs[Reg::RES_CURRENT_DEC_HI], regs[Reg::RES_CURRENT_DEC_LO]);
 
-    regs[Reg::MOTORS_ENABLE] = 0;
-    regs[Reg::STATUS]     = Status::MOTORS_DISABLED;
-    regs[Reg::ERROR_CODE] = 0x00;
+    regs[Reg::RES_STATUS]     = Status::MOTORS_DISABLED;
+    regs[Reg::RES_ERROR_CODE] = 0x00;
 }
 
 void saveCurrentStepperPosition() {
@@ -133,8 +131,8 @@ void saveCurrentStepperPosition() {
     currentDECArcsec100 = stepsToArcsec100(axisDEC.currentPosition());
     targetRAArcsec100   = currentRAArcsec100;
     targetDECArcsec100  = currentDECArcsec100;
-    encode32(currentRAArcsec100,  regs[Reg::CURRENT_RA_HI],  regs[Reg::CURRENT_RA_LO]);
-    encode32Signed(currentDECArcsec100, regs[Reg::CURRENT_DEC_HI], regs[Reg::CURRENT_DEC_LO]);
+    encode32(currentRAArcsec100,  regs[Reg::RES_CURRENT_RA_HI],  regs[Reg::RES_CURRENT_RA_LO]);
+    encode32Signed(currentDECArcsec100, regs[Reg::RES_CURRENT_DEC_HI], regs[Reg::RES_CURRENT_DEC_LO]);
 }
 
 void controlledMotorStop() {
@@ -147,7 +145,6 @@ void controlledMotorStop() {
     followTrackingEnabled = false;
     manualJogActive = false;
     softStopInProgress = true;
-    regs[Reg::TRACKING_ENABLE] = 0;
 
     axisRA.setMaxSpeed(MAX_SPEED);
     axisRA.setAcceleration(ACCELERATION);
@@ -159,7 +156,7 @@ void controlledMotorStop() {
     if (axisRA.distanceToGo() == 0 && axisDEC.distanceToGo() == 0) {
         softStopInProgress = false;
         saveCurrentStepperPosition();
-        regs[Reg::STATUS] = Status::IDLE;
+        regs[Reg::RES_STATUS] = Status::IDLE;
     }
 }
 
@@ -186,7 +183,7 @@ int32_t encoderToSteps(AMS_AS5048B& enc, float& lastAngle, int32_t& accumSteps) 
 // ── Tracking siderale ────────────────────────────────────────────────────────
 void startTracking() {
     if (!motorsEnabled) {
-        regs[Reg::STATUS] = Status::MOTORS_DISABLED;
+        regs[Reg::RES_STATUS] = Status::MOTORS_DISABLED;
         return;
     }
 
@@ -198,7 +195,6 @@ void startTracking() {
     axisRA.setAcceleration(10.0f);
     axisRA.moveTo(axisRA.currentPosition() - (long)STEPS_PER_REV * 1000L);
     trackingActive = true;
-    regs[Reg::TRACKING_ENABLE] = 1;
     #ifdef DEBUG_SERIAL
         Serial.printf("[TRACK] mode=%u rate=%.3f steps/s\n", trackingMode, rate);
     #endif
@@ -209,7 +205,6 @@ void stopTracking() {
     axisRA.setAcceleration(ACCELERATION);
     axisRA.stop();
     trackingActive = false;
-    regs[Reg::TRACKING_ENABLE] = 0;
     #ifdef DEBUG_SERIAL
         Serial.println("[TRACK] Stopped");
     #endif
@@ -218,8 +213,8 @@ void stopTracking() {
 // ── Target da registri Modbus ────────────────────────────────────────────────
 void readTargetRegisters(uint32_t& ra, int32_t& dec) {
     ra  = normalizeRAArcsec100(
-        decode32(regs[Reg::TARGET_RA_HI], regs[Reg::TARGET_RA_LO]));
-    dec = decode32Signed(regs[Reg::TARGET_DEC_HI], regs[Reg::TARGET_DEC_LO]);
+        decode32(regs[Reg::REQ_TARGET_RA_HI], regs[Reg::REQ_TARGET_RA_LO]));
+    dec = decode32Signed(regs[Reg::REQ_TARGET_DEC_HI], regs[Reg::REQ_TARGET_DEC_LO]);
 }
 
 bool targetRegistersChanged() {
@@ -231,7 +226,7 @@ bool targetRegistersChanged() {
 
 void moveToTargetRegisters(bool trackOnArrival, const char* commandName) {
     if (!motorsEnabled) {
-        regs[Reg::STATUS] = Status::MOTORS_DISABLED;
+        regs[Reg::RES_STATUS] = Status::MOTORS_DISABLED;
         #ifdef DEBUG_SERIAL
             Serial.printf("[CMD] %s ignored: motors disabled\n", commandName);
         #endif
@@ -256,7 +251,7 @@ void moveToTargetRegisters(bool trackOnArrival, const char* commandName) {
     axisDEC.setAcceleration(ACCELERATION);
     axisRA.moveTo(arcsec100ToSteps(targetRAArcsec100));
     axisDEC.moveTo(arcsec100ToSteps(targetDECArcsec100));
-    regs[Reg::STATUS] = Status::SLEWING;
+    regs[Reg::RES_STATUS] = Status::SLEWING;
 
     #ifdef DEBUG_SERIAL
         Serial.printf("[CMD] %s RA=%lu DEC=%ld\n",
@@ -266,13 +261,12 @@ void moveToTargetRegisters(bool trackOnArrival, const char* commandName) {
 
 // ── Comandi mount Milestone 0 ────────────────────────────────────────────────
 void setTrackingFromRegisters() {
-    trackingMode = regs[Reg::TRACKING_MODE];
+    trackingMode = regs[Reg::REQ_TRACKING_MODE];
     if (trackingMode > TrackingMode::SOLAR) {
         trackingMode = TrackingMode::SIDEREAL;
-        regs[Reg::TRACKING_MODE] = trackingMode;
     }
 
-    if (regs[Reg::TRACKING_ENABLE] != 0) {
+    if (regs[Reg::REQ_TRACKING_ENABLE] != 0) {
         startTracking();
     } else {
         controlledMotorStop();
@@ -280,19 +274,19 @@ void setTrackingFromRegisters() {
 
     #ifdef DEBUG_SERIAL
         Serial.printf("[CMD] SET_TRACKING enable=%u mode=%u\n",
-                      regs[Reg::TRACKING_ENABLE], trackingMode);
+                      regs[Reg::REQ_TRACKING_ENABLE], trackingMode);
     #endif
 }
 
 void setMotorsFromRegisters() {
-    motorsEnabled = regs[Reg::MOTORS_ENABLE] != 0;
+    motorsEnabled = regs[Reg::REQ_MOTORS_ENABLE] != 0;
 
     if (motorsEnabled) {
         setMotorOutputsEnabled(true);
         manualJogActive = false;
         softStopInProgress = false;
         if (!trackingActive && !gotoInProgress) {
-            regs[Reg::STATUS] = Status::IDLE;
+            regs[Reg::RES_STATUS] = Status::IDLE;
         }
     } else {
         long raNow  = axisRA.currentPosition();
@@ -303,28 +297,27 @@ void setMotorsFromRegisters() {
         followTrackingEnabled = false;
         softStopInProgress = false;
         manualJogActive = false;
-        regs[Reg::TRACKING_ENABLE] = 0;
         axisRA.moveTo(raNow);
         axisDEC.moveTo(decNow);
         setMotorOutputsEnabled(false);
         saveCurrentStepperPosition();
-        regs[Reg::STATUS] = Status::MOTORS_DISABLED;
+        regs[Reg::RES_STATUS] = Status::MOTORS_DISABLED;
     }
 
     #ifdef DEBUG_SERIAL
-        Serial.printf("[CMD] SET_MOTORS enable=%u\n", regs[Reg::MOTORS_ENABLE]);
+        Serial.printf("[CMD] SET_MOTORS enable=%u\n", regs[Reg::REQ_MOTORS_ENABLE]);
     #endif
 }
 
 void startJogFromRegisters() {
     if (!motorsEnabled) {
-        regs[Reg::STATUS] = Status::MOTORS_DISABLED;
+        regs[Reg::RES_STATUS] = Status::MOTORS_DISABLED;
         return;
     }
 
-    uint16_t axis = regs[Reg::JOG_AXIS];
-    uint16_t direction = regs[Reg::JOG_DIRECTION];
-    float speed = jogSpeedForProfile(regs[Reg::JOG_SPEED]);
+    uint16_t axis = regs[Reg::REQ_JOG_AXIS];
+    uint16_t direction = regs[Reg::REQ_JOG_DIRECTION];
+    float speed = jogSpeedForProfile(regs[Reg::REQ_JOG_SPEED]);
     long jogDistance = (direction == JogDirection::POSITIVE)
                          ? (long)STEPS_PER_REV * 1000L
                          : -(long)STEPS_PER_REV * 1000L;
@@ -346,11 +339,11 @@ void startJogFromRegisters() {
     }
 
     manualJogActive = true;
-    regs[Reg::STATUS] = Status::MANUAL_JOG;
+    regs[Reg::RES_STATUS] = Status::MANUAL_JOG;
 
     #ifdef DEBUG_SERIAL
         Serial.printf("[CMD] JOG_START axis=%u dir=%u speedProfile=%u speed=%.1f\n",
-                      axis, direction, regs[Reg::JOG_SPEED], speed);
+                      axis, direction, regs[Reg::REQ_JOG_SPEED], speed);
     #endif
 }
 
@@ -413,11 +406,11 @@ void updatePositionRegisters() {
         if (shouldBeStill &&
            (abs(errRA)  > ENCODER_ERROR_THRESHOLD ||
             abs(errDEC) > ENCODER_ERROR_THRESHOLD)) {
-            regs[Reg::STATUS]     = Status::ERROR;
-            regs[Reg::ERROR_CODE] = 0x01;  // position fault
+            regs[Reg::RES_STATUS]     = Status::ERROR;
+            regs[Reg::RES_ERROR_CODE] = 0x01;  // position fault
             encode32(normalizeRAArcsec100(stepsToArcsec100(encRA)),
-                     regs[Reg::CURRENT_RA_HI], regs[Reg::CURRENT_RA_LO]);
-            encode32Signed(stepsToArcsec100(encDEC), regs[Reg::CURRENT_DEC_HI], regs[Reg::CURRENT_DEC_LO]);
+                     regs[Reg::RES_CURRENT_RA_HI], regs[Reg::RES_CURRENT_RA_LO]);
+            encode32Signed(stepsToArcsec100(encDEC), regs[Reg::RES_CURRENT_DEC_HI], regs[Reg::RES_CURRENT_DEC_LO]);
             return;
         }
 
@@ -426,8 +419,8 @@ void updatePositionRegisters() {
         }
         currentDECArcsec100 = stepsToArcsec100(encDEC);
 
-        encode32(currentRAArcsec100,  regs[Reg::CURRENT_RA_HI],  regs[Reg::CURRENT_RA_LO]);
-        encode32Signed(currentDECArcsec100, regs[Reg::CURRENT_DEC_HI], regs[Reg::CURRENT_DEC_LO]);
+        encode32(currentRAArcsec100,  regs[Reg::RES_CURRENT_RA_HI],  regs[Reg::RES_CURRENT_RA_LO]);
+        encode32Signed(currentDECArcsec100, regs[Reg::RES_CURRENT_DEC_HI], regs[Reg::RES_CURRENT_DEC_LO]);
     }
     #else
     {
@@ -440,22 +433,22 @@ void updatePositionRegisters() {
         }
 
         encode32(currentRAArcsec100,
-                 regs[Reg::CURRENT_RA_HI], regs[Reg::CURRENT_RA_LO]);
+                 regs[Reg::RES_CURRENT_RA_HI], regs[Reg::RES_CURRENT_RA_LO]);
         encode32Signed(currentDECArcsec100,
-                       regs[Reg::CURRENT_DEC_HI], regs[Reg::CURRENT_DEC_LO]);
+                       regs[Reg::RES_CURRENT_DEC_HI], regs[Reg::RES_CURRENT_DEC_LO]);
     }
     #endif
 
     bool slewing = (!trackingActive && !manualJogActive && axisRA.distanceToGo()  != 0)
                 ||  (!manualJogActive && axisDEC.distanceToGo() != 0);
 
-    if      (!motorsEnabled)    regs[Reg::STATUS] = Status::MOTORS_DISABLED;
-    else if (manualJogActive)   regs[Reg::STATUS] = Status::MANUAL_JOG;
-    else if (slewing)           regs[Reg::STATUS] = Status::SLEWING;
-    else if (trackingActive)    regs[Reg::STATUS] = Status::TRACKING;
-    else                        regs[Reg::STATUS] = Status::IDLE;
+    if      (!motorsEnabled)    regs[Reg::RES_STATUS] = Status::MOTORS_DISABLED;
+    else if (manualJogActive)   regs[Reg::RES_STATUS] = Status::MANUAL_JOG;
+    else if (slewing)           regs[Reg::RES_STATUS] = Status::SLEWING;
+    else if (trackingActive)    regs[Reg::RES_STATUS] = Status::TRACKING;
+    else                        regs[Reg::RES_STATUS] = Status::IDLE;
 
-    regs[Reg::ERROR_CODE] = 0x00;
+    regs[Reg::RES_ERROR_CODE] = 0x00;
 }
 
 // ── Setup ────────────────────────────────────────────────────────────────────
@@ -472,19 +465,19 @@ void setup() {
     tmcDriver.begin();
     // Segnala errore su LED se un driver non risponde
     if (!tmcDriver.isRAok() || !tmcDriver.isDECok()) {
-        regs[Reg::STATUS]     = Status::ERROR;
-        regs[Reg::ERROR_CODE] = 0x02;  // driver fault
+        regs[Reg::RES_STATUS]     = Status::ERROR;
+        regs[Reg::RES_ERROR_CODE] = 0x02;  // driver fault
     }
 
     pinMode(ESTOP_PIN, INPUT_PULLUP);
     pinMode(RA_EN,  OUTPUT);
     pinMode(DEC_EN, OUTPUT);
-    regs[Reg::TRACKING_ENABLE] = 0;
-    regs[Reg::TRACKING_MODE] = TrackingMode::SIDEREAL;
-    regs[Reg::MOTORS_ENABLE] = 1;
-    regs[Reg::JOG_SPEED] = JogSpeed::CENTER;
+    regs[Reg::REQ_TRACKING_ENABLE] = 0;
+    regs[Reg::REQ_TRACKING_MODE] = TrackingMode::SIDEREAL;
+    regs[Reg::REQ_MOTORS_ENABLE] = 1;
+    regs[Reg::REQ_JOG_SPEED] = JogSpeed::CENTER;
     motorsEnabled = true;
-    trackingMode = regs[Reg::TRACKING_MODE];
+    trackingMode = regs[Reg::REQ_TRACKING_MODE];
     setMotorOutputsEnabled(true);
 
     axisRA.setMaxSpeed(MAX_SPEED);
@@ -503,7 +496,7 @@ void setup() {
         #endif
     #endif
 
-    regs[Reg::STATUS] = Status::IDLE;
+    regs[Reg::RES_STATUS] = Status::IDLE;
 
     #ifdef DEBUG_SERIAL
         Serial.println("[BOOT] Ready");
@@ -517,23 +510,21 @@ void loop() {
 
     if (isHardwiredStopActive()) {
         immediateMotorStop();
-        ledStatus.update(regs[Reg::STATUS]);
+        ledStatus.update(regs[Reg::RES_STATUS]);
         return;
     }
 
     // 2. Comandi
     static uint16_t lastCmd = Cmd::IDLE;
-    uint16_t cmd = regs[Reg::COMMAND];
+    uint16_t cmd = regs[Reg::REQ_COMMAND];
 
     if (cmd != lastCmd) {
         lastCmd = cmd;
-        bool clearCommand = false;
         switch (cmd) {
 
             case Cmd::GOTO:
                 followTrackingEnabled = false;
                 moveToTargetRegisters(true, "GOTO");
-                clearCommand = true;
                 break;
 
             case Cmd::FOLLOW_TARGET:
@@ -546,7 +537,6 @@ void loop() {
             case Cmd::STOP:
                 followTrackingEnabled = false;
                 controlledMotorStop();
-                clearCommand = true;
                 #ifdef DEBUG_SERIAL
                     Serial.println("[CMD] STOP");
                 #endif
@@ -554,29 +544,25 @@ void loop() {
 
             case Cmd::SET_TRACKING:
                 setTrackingFromRegisters();
-                clearCommand = true;
                 break;
 
             case Cmd::SET_MOTORS:
                 setMotorsFromRegisters();
-                clearCommand = true;
                 break;
 
             case Cmd::JOG_START:
                 startJogFromRegisters();
-                clearCommand = true;
                 break;
 
             case Cmd::JOG_STOP:
                 stopJog();
-                clearCommand = true;
                 break;
 
             case Cmd::SYNC: {
                 currentRAArcsec100 = normalizeRAArcsec100(
-                    decode32(regs[Reg::TARGET_RA_HI],  regs[Reg::TARGET_RA_LO]));
-                currentDECArcsec100 = decode32Signed(regs[Reg::TARGET_DEC_HI],
-                                                     regs[Reg::TARGET_DEC_LO]);
+                    decode32(regs[Reg::REQ_TARGET_RA_HI],  regs[Reg::REQ_TARGET_RA_LO]));
+                currentDECArcsec100 = decode32Signed(regs[Reg::REQ_TARGET_DEC_HI],
+                                                     regs[Reg::REQ_TARGET_DEC_LO]);
                 targetRAArcsec100  = currentRAArcsec100;
                 targetDECArcsec100 = currentDECArcsec100;
                 int32_t raSteps  = arcsec100ToSteps(currentRAArcsec100);
@@ -591,18 +577,12 @@ void loop() {
                 #ifdef DEBUG_SERIAL
                     Serial.printf("[CMD] SYNC RA=%ld DEC=%ld steps\n", raSteps, decSteps);
                 #endif
-                clearCommand = true;
                 break;
             }
         }
-
-        if (clearCommand) {
-            regs[Reg::COMMAND] = Cmd::IDLE;
-            lastCmd = Cmd::IDLE;
-        }
     }
 
-    if (cmd == Cmd::FOLLOW_TARGET && targetRegistersChanged()) {
+    if (followTrackingEnabled && targetRegistersChanged()) {
         moveToTargetRegisters(followTrackingEnabled, "FOLLOW");
     }
 
@@ -627,7 +607,7 @@ void loop() {
         axisDEC.distanceToGo() == 0) {
         softStopInProgress = false;
         saveCurrentStepperPosition();
-        regs[Reg::STATUS] = Status::IDLE;
+        regs[Reg::RES_STATUS] = Status::IDLE;
         #ifdef DEBUG_SERIAL
             Serial.println("[CMD] STOP complete, position saved");
         #endif
@@ -637,5 +617,5 @@ void loop() {
     updatePositionRegisters();
 
     // 6. LED
-    ledStatus.update(regs[Reg::STATUS]);
+    ledStatus.update(regs[Reg::RES_STATUS]);
 }
