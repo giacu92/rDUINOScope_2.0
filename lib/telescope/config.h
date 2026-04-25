@@ -1,3 +1,18 @@
+/*
+ * STM32 firmware revision notes
+ *
+ * Version values are exposed through RES_STM32_FW_VERSION as 0xMMmm.
+ * Beta builds use 0xB00n, where B marks a beta firmware line and n is the
+ * beta revision number.
+ *
+ * 0x0200 - Legacy numeric 2.0 tag used before the beta revision line.
+ * 0xB001 - Beta baseline for the ESP32/STM32 Modbus mount-control contract.
+ * 0xB002 - Adds the STM32 firmware-version response register used by ESP32
+ *          boot diagnostics and UI status.
+ * 0xB003 - Builds on B002 by making controlled STOP clear the tracking request
+ *          and by starting the same stop flow if tracking is active while
+ *          REQ_TRACKING_ENABLE has already been cleared by the master.
+ */
 // ── config.h aggiornato ───────────────────────────────────────────────────
 #pragma once
 
@@ -41,7 +56,7 @@ constexpr uint8_t MODBUS_TX_PIN = PA9;
 constexpr uint8_t RS485_DE_PIN  = PA15;  // #ifdef USE_RS485
 
 // Firmware version exposed through Modbus as 0xMMmm (major.minor).
-constexpr uint16_t STM32_FIRMWARE_VERSION = 0x0200;
+constexpr uint16_t STM32_FIRMWARE_VERSION = 0xB003; // v0.3 *beta*
 
 // ── TMC UART — Serial6 (USART6) ──────────────────────────────────────────
 // PA11=TX, PA12=RX  (hardware USART6, USB OTG non usata)
