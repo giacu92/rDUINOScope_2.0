@@ -9,9 +9,11 @@
  * 0xB001 - Beta baseline for the ESP32/STM32 Modbus mount-control contract.
  * 0xB002 - Adds the STM32 firmware-version response register used by ESP32
  *          boot diagnostics and UI status.
- * 0xB003 - Builds on B002 by making controlled STOP clear the tracking request
- *          and by starting the same stop flow if tracking is active while
- *          REQ_TRACKING_ENABLE has already been cleared by the master.
+ * 0xB003 - Adds controlled STOP behavior that clears local motion state and
+ *          decelerates to IDLE.
+ * 0xB004 - Keeps REQ_* registers ESP32-owned: STOP no longer rewrites
+ *          REQ_TRACKING_ENABLE, and tracking changes are applied only through
+ *          explicit pending commands.
  */
 // ── config.h aggiornato ───────────────────────────────────────────────────
 #pragma once
@@ -56,7 +58,7 @@ constexpr uint8_t MODBUS_TX_PIN = PA9;
 constexpr uint8_t RS485_DE_PIN  = PA15;  // #ifdef USE_RS485
 
 // Firmware version exposed through Modbus as 0xMMmm (major.minor).
-constexpr uint16_t STM32_FIRMWARE_VERSION = 0xB003; // v0.3 *beta*
+constexpr uint16_t STM32_FIRMWARE_VERSION = 0xB004; // v0.4 *beta*
 
 // ── TMC UART — Serial6 (USART6) ──────────────────────────────────────────
 // PA11=TX, PA12=RX  (hardware USART6, USB OTG non usata)
