@@ -107,6 +107,7 @@ void immediateMotorStop() {
     axisRA.moveTo(raNow);
     axisDEC.moveTo(decNow);
 
+    regs[Reg::REQ_TRACKING_ENABLE] = 0;
     trackingActive = false;
     gotoInProgress = false;
     followTrackingEnabled = false;
@@ -140,6 +141,7 @@ void controlledMotorStop() {
         setMotorOutputsEnabled(true);
     }
 
+    regs[Reg::REQ_TRACKING_ENABLE] = 0;
     trackingActive = false;
     gotoInProgress = false;
     followTrackingEnabled = false;
@@ -513,6 +515,10 @@ void loop() {
         immediateMotorStop();
         ledStatus.update(regs[Reg::RES_STATUS]);
         return;
+    }
+
+    if (trackingActive && regs[Reg::REQ_TRACKING_ENABLE] == 0) {
+        controlledMotorStop();
     }
 
     // 2. Comandi

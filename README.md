@@ -230,14 +230,15 @@ Writing `REQ_COMMAND=2` to register `40005`, then `REQ_COMMAND_PENDING=1` to reg
 
 Behavior:
 
-1. `trackingActive` is cleared.
-2. Any GOTO completion auto-tracking is cancelled.
-3. RA and DEC remain enabled.
-4. `AccelStepper::stop()` is applied to both axes, so the motors decelerate using the configured acceleration.
-5. When both axes reach zero `distanceToGo()`, the firmware saves the reached RA/DEC into `RES_CURRENT_RA_*` and `RES_CURRENT_DEC_*`.
-6. `RES_STATUS` returns to `IDLE`.
+1. `REQ_TRACKING_ENABLE` is cleared locally, so request state matches the stopped state.
+2. `trackingActive` is cleared.
+3. Any GOTO completion auto-tracking is cancelled.
+4. RA and DEC remain enabled.
+5. `AccelStepper::stop()` is applied to both axes, so the motors decelerate using the configured acceleration.
+6. When both axes reach zero `distanceToGo()`, the firmware saves the reached RA/DEC into `RES_CURRENT_RA_*` and `RES_CURRENT_DEC_*`.
+7. `RES_STATUS` returns to `IDLE`.
 
-This means the ESP32 can send STOP, wait until `RES_STATUS=IDLE`, then read the final RA/DEC registers as the actual stopped position.
+This means the ESP32 can send STOP, wait until `RES_STATUS=IDLE`, then read the final RA/DEC registers as the actual stopped position. As a defensive path, if `REQ_TRACKING_ENABLE` is written to `0` while tracking is active, STM32 also starts the same controlled stop flow.
 
 #### Hardwired Emergency STOP
 The hardwired stop input is `PA0`, configured as `INPUT_PULLUP` and active LOW. Pulling PA0 to GND triggers an immediate stop path:
